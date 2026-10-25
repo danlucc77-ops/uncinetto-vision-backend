@@ -5,11 +5,10 @@ import numpy as np
 from PIL import Image
 import google.genai as genai
 import json
-import io
 import base64
 from typing import List
 
-app = FastAPI(title="Uncinetto Vision AI Native", version="5.0")
+app = FastAPI(title="Uncinetto Vision AI Generator", version="6.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -23,7 +22,7 @@ client = genai.Client()
 
 @app.get("/")
 def home():
-    return {"status": "online", "message": "Uncinetto Vision API AI-Native è attiva!"}
+    return {"status": "online", "message": "Uncinetto Vision AI Generator è attiva!"}
 
 @app.post("/generate-pattern")
 async def generate_pattern(
@@ -53,7 +52,7 @@ async def generate_pattern(
         if not pil_images:
             raise HTTPException(status_code=400, detail="Nessuna immagine valida caricata.")
 
-        # Prompt progettato per richiedere un'analisi sartoriale profonda e la descrizione/struttura dello schema grafico
+        # 1. Generazione della Guida Sartoriale Testuale tramite Gemini
         prompt = f"""
         Agisci come una maestra d'uncinetto e una redattrice di riviste di moda d'eccellenza.
         Parametri tecnici obbligatori:
@@ -62,11 +61,10 @@ async def generate_pattern(
         - Spessore filato: '{yarn_weight}'
         - Misura uncinetto: '{hook_size}'
         
-        Analizza le immagini con la massima attenzione e restituisci un oggetto JSON valido (e nessun altro testo fuori dal JSON) con questa struttura esatta:
+        Analizza le immagini e restituisci un oggetto JSON valido (e nessun altro testo fuori dal JSON) con questa struttura esatta:
         {{
-          "nome_punto": "Nome tecnico della trama (es. Punto Ananas e Ventagli)",
-          "istruzioni_testuali": "GUIDA EDITORIALE COMPLETA IN MARKDOWN (Introduzione, Misure in cm, Materiali, Multiplo, Istruzioni riga per riga, Assemblaggio, Rifiniture)...",
-          "descrizione_schema_grafico": "Descrizione dettagliata riga per riga dello schema grafico tradizionale (simboli, catenelle, archetti, ventagli) da mostrare all'utente."
+          "nome_punto": "Nome tecnico della trama",
+          "istruzioni_testuali": "GUIDA EDITORIALE COMPLETA IN MARKDOWN (Introduzione, Misure in cm, Materiali, Multiplo, Istruzioni riga per riga, Assemblaggio, Rifiniture)..."
         }}
         """
 
@@ -84,14 +82,14 @@ async def generate_pattern(
 
         data_json = json.loads(raw_text)
 
-        # Generazione dell'immagine dello schema grafico tramite le capacità visive/creative dell'IA
+        # 2. Generazione dello Schema Grafico Visivo affidata interamente all'IA (Imagen)
         chart_prompt = f"""
-        Crea un'immagine grafica professionale e pulita di uno schema all'uncinetto in stile rivista (tipo ManiFantasia), 
-        rappresentando il modulo del punto per il capo '{garment_type}' con i simboli tradizionali dell'uncinetto 
-        (catenelle 'o', maglie alte '|', ventagli e archetti) disposti su una griglia chiara a sfondo bianco con righe numerate R1, R2, R3...
-        Il disegno deve essere ordinato, tecnico, nitido e altamente leggibile, senza scritte confuse.
+        Professional crochet diagram schematic for a {garment_type}, clean technical crochet chart on a fine white grid background, 
+        showing repeating pattern rows (R1, R2, R3...) with traditional crochet symbols: chain circles ('o'), double crochet vertical bars ('|'), 
+        and fan motifs ('V'). High quality magazine pattern illustration style, crisp lines, black symbols on white background, no blurry text.
         """
 
+        # Chiamata di generazione immagine nativa supportata
         image_response = client.models.generate_images(
             model='imagen-3.0-generate-002',
             prompt=chart_prompt,
