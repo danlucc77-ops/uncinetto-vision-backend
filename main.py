@@ -1,4 +1,5 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 import cv2
 import numpy as np
 from PIL import Image
@@ -7,8 +8,16 @@ import os
 
 app = FastAPI(title="Uncinetto Vision API", version="1.0")
 
-# Inizializza il client GenAI. 
-# La chiave API verrà letta automaticamente dalle variabili d'ambiente di Render.
+# Configurazione CORS per permettere le chiamate da Flutter Web e dispositivi
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Permette le richieste da qualsiasi origine
+    allow_credentials=True,
+    allow_methods=["*"],  # Permette tutti i metodi (GET, POST, ecc.)
+    allow_headers=["*"],  # Permette tutti gli header
+)
+
+# Inizializza il client GenAI usando la variabile d'ambiente di Render
 client = genai.Client()
 
 @app.get("/")
