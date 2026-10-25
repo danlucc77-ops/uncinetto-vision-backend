@@ -5,10 +5,9 @@ import numpy as np
 from PIL import Image
 import google.genai as genai
 import json
-import base64
 from typing import List
 
-app = FastAPI(title="Uncinetto Vision AI Generator", version="6.0")
+app = FastAPI(title="Uncinetto Vision API Core", version="8.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -22,7 +21,7 @@ client = genai.Client()
 
 @app.get("/")
 def home():
-    return {"status": "online", "message": "Uncinetto Vision AI Generator è attiva!"}
+    return {"status": "online", "message": "Uncinetto Vision API Core è attiva!"}
 
 @app.post("/generate-pattern")
 async def generate_pattern(
@@ -52,7 +51,6 @@ async def generate_pattern(
         if not pil_images:
             raise HTTPException(status_code=400, detail="Nessuna immagine valida caricata.")
 
-        # 1. Generazione della Guida Sartoriale Testuale tramite Gemini
         prompt = f"""
         Agisci come una maestra d'uncinetto e una redattrice di riviste di moda d'eccellenza.
         Parametri tecnici obbligatori:
@@ -61,7 +59,7 @@ async def generate_pattern(
         - Spessore filato: '{yarn_weight}'
         - Misura uncinetto: '{hook_size}'
         
-        Analizza le immagini e restituisci un oggetto JSON valido (e nessun altro testo fuori dal JSON) con questa struttura esatta:
+        Analizza le immagini con la massima attenzione e restituisci un oggetto JSON valido (e nessun altro testo fuori dal JSON) con questa struttura esatta:
         {{
           "nome_punto": "Nome tecnico della trama",
           "istruzioni_testuali": "GUIDA EDITORIALE COMPLETA IN MARKDOWN (Introduzione, Misure in cm, Materiali, Multiplo, Istruzioni riga per riga, Assemblaggio, Rifiniture)..."
@@ -82,34 +80,10 @@ async def generate_pattern(
 
         data_json = json.loads(raw_text)
 
-        # 2. Generazione dello Schema Grafico Visivo affidata interamente all'IA (Imagen)
-        chart_prompt = f"""
-        Professional crochet diagram schematic for a {garment_type}, clean technical crochet chart on a fine white grid background, 
-        showing repeating pattern rows (R1, R2, R3...) with traditional crochet symbols: chain circles ('o'), double crochet vertical bars ('|'), 
-        and fan motifs ('V'). High quality magazine pattern illustration style, crisp lines, black symbols on white background, no blurry text.
-        """
-
-        # Chiamata di generazione immagine nativa supportata
-        image_response = client.models.generate_images(
-            model='imagen-3.0-generate-002',
-            prompt=chart_prompt,
-            config=dict(
-                number_of_images=1,
-                output_mime_type="image/png",
-                aspect_ratio="4:3"
-            )
-        )
-
-        chart_base64 = ""
-        for generated_image in image_response.generated_images:
-            chart_base64 = base64.b64encode(generated_image.image.image_bytes).decode('utf-8')
-            break
-
         return {
             "status": "success",
             "nome_punto": data_json.get("nome_punto", "Schema Uncinetto"),
-            "pattern": data_json["istruzioni_testuali"],
-            "schema_image": chart_base64
+            "pattern": data_json["istruzioni_testuali"]
         }
 
     except Exception as e:
