@@ -34,7 +34,7 @@ Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
 warnings.simplefilter("error", Image.DecompressionBombWarning)
 
 limiter = Limiter(key_func=get_remote_address)
-app = FastAPI(title="Uncinetto Vision AI", version="10.1")
+app = FastAPI(title="Uncinetto Vision AI", version="11.1")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -54,13 +54,23 @@ app.add_middleware(
 ai_semaphore = asyncio.Semaphore(int(os.getenv("MAX_CONCURRENT_AI_REQUESTS", "2")))
 
 
-class CrochetAnalysis(BaseModel):
-    nome_punto: str = Field(description="Nome tecnico del punto o della lavorazione.")
-    istruzioni_testuali: str = Field(
-        description="Guida tecnica italiana completa e prudente, con titoli in testo semplice."
-    )
+class CrochetMotif(BaseModel):
+    nome: str = Field(description="Nome del singolo motivo, senza numero di sezione.")
+    multiplo: str = Field(description="Multiplo o rapporto di ripetizione, indicando se è ipotetico.")
     descrizione_visiva: str = Field(
-        description="Descrizione precisa della struttura, dei simboli e della ripetizione da disegnare."
+        description="Struttura precisa del motivo, sequenza dei simboli, righe e ripetizione da disegnare."
+    )
+
+
+class CrochetAnalysis(BaseModel):
+    nome_punto: str = Field(description="Titolo complessivo del progetto o della lavorazione.")
+    istruzioni_testuali: str = Field(
+        description="Scheda tutorial italiana completa, con materiali, motivi, montaggio e rifiniture."
+    )
+    motivi: List[CrochetMotif] = Field(
+        min_length=1,
+        max_length=3,
+        description="Da uno a tre motivi realmente distinti osservati nelle fotografie.",
     )
 
 
@@ -166,11 +176,19 @@ Parametri forniti dall'utente:
 - Filato: {yarn_weight}
 - Uncinetto: {hook_size}
 
-Produci una guida in italiano che includa, quando ricavabili: nome del punto, materiali,
-multiplo, sequenza delle righe o dei giri, legenda dei simboli e rifiniture. Distingui
-chiaramente le osservazioni dalle ipotesi. Ricorda che occorre realizzare e misurare un
-campione per verificare tensione, multipli e misure. La descrizione_visiva servirà a un
-secondo modello per disegnare uno schema tecnico coerente con la guida.
+Produci una scheda tutorial in italiano, ordinata come una pagina tecnica di rivista:
+panoramica del progetto, osservazioni e ipotesi, materiali, campione obbligatorio,
+legenda e abbreviazioni, poi una sezione per ciascun motivo con multiplo e istruzioni
+riga per riga. Se sono visibili più fasce, indica il loro ordine dal basso verso l'alto.
+Concludi con montaggio, eventuali maniche e rifiniture soltanto quando ricavabili o
+chiaramente proposti come ipotesi. Non inventare taglie, misure o diminuzioni.
+
+Nel campo motivi inserisci da uno a tre motivi realmente distinti: se il progetto usa un
+solo punto, restituisci un solo elemento; non creare varianti artificiali per arrivare a
+tre. Per ogni motivo fornisci una descrizione_visiva sufficientemente precisa da guidare
+un secondo modello nella creazione di un singolo schema bianco e nero. Ogni schema dovrà
+essere separato dagli altri e coerente con le istruzioni testuali. Ricorda di verificare
+tensione, multipli e misure con un campione.
 """
     interaction = get_client().interactions.create(
         model=TEXT_MODEL,
@@ -184,37 +202,42 @@ secondo modello per disegnare uno schema tecnico coerente con la guida.
     if not interaction.output_text:
         raise ValueError("Il modello non ha restituito l'analisi testuale.")
     analysis = CrochetAnalysis.model_validate_json(interaction.output_text)
-    if len(analysis.istruzioni_testuali.strip()) < 80 or len(analysis.descrizione_visiva.strip()) < 30:
+    if len(analysis.istruzioni_testuali.strip()) < 80 or not analysis.motivi:
         raise ValueError("L'analisi ricevuta è incompleta.")
+    for motif in analysis.motivi:
+        if len(motif.descrizione_visiva.strip()) < 30 or not motif.multiplo.strip():
+            raise ValueError("Uno dei motivi ricevuti è incompleto.")
     return analysis
 
 
 def _generate_chart_sync(
     images: List[bytes],
-    analysis: CrochetAnalysis,
+    motif: CrochetMotif,
+    motif_number: int,
     work_direction: str,
 ) -> tuple[bytes, str]:
     prompt = f"""
-Crea direttamente un'IMMAGINE di uno schema all'uncinetto professionale, realistico
-nello stile di una rivista tecnica editoriale, usando le fotografie come riferimento
-visivo e l'analisi seguente come specifica obbligatoria.
+Crea direttamente l'IMMAGINE di UN SOLO schema all'uncinetto, con lo stile essenziale
+degli schemi tecnici in bianco e nero pubblicati nelle riviste e nei tutorial cartacei.
+Usa le fotografie come riferimento visivo e la specifica seguente come vincolo tecnico.
 
-ANALISI TECNICA:
-{analysis.model_dump_json()}
+MOTIVO {motif_number}: {motif.nome}
+MULTIPLO O RIPETIZIONE: {motif.multiplo}
+DIREZIONE DI LAVORAZIONE: {work_direction}
+STRUTTURA DA DISEGNARE: {motif.descrizione_visiva}
 
-Direzione di lavorazione: {work_direction}
-
-Requisiti grafici:
-- schema tecnico all'uncinetto, NON una fotografia del capo e NON un'illustrazione decorativa;
-- fondo bianco, griglia chiara, simboli internazionali nitidi e uniformi;
-- righe o giri numerati, direzione di lavorazione e ripetizione del multiplo ben visibili;
-- legenda essenziale e titolo leggibile in italiano;
-- struttura coerente con l'analisi, senza aggiungere punti o misure inventate;
-- composizione ordinata, margini ampi, niente simboli tagliati, niente testo piccolo;
-- niente mani, persone, gomitoli, uncinetti o elementi fotografici di contorno.
-
-Titolo dello schema: {analysis.nome_punto}
-Descrizione da seguire: {analysis.descrizione_visiva}
+Requisiti grafici obbligatori:
+- rappresenta esclusivamente questo motivo, senza unirlo ad altre fasce o sezioni;
+- simboli internazionali neri su fondo bianco, sottili, nitidi e ben distanziati;
+- aspetto pulito di un diagramma tecnico, non un rendering fotografico e non un disegno decorativo;
+- numerazione delle righe o dei giri ai lati, seguendo la direzione di lavorazione;
+- evidenzia con una parentesi o un riquadro leggero il rapporto di ripetizione;
+- mostra almeno due ripetizioni orizzontali quando il motivo lo consente, senza deformare i simboli;
+- titolo piccolo e leggibile, con il solo nome del motivo e il multiplo;
+- una sola legenda minima, soltanto se necessaria, senza duplicarla;
+- niente griglia colorata, intestazioni enormi, paragrafi, fotografie, mani, persone o gomitoli;
+- ampi margini bianchi e nessun simbolo tagliato;
+- non aggiungere punti, righe, misure o dettagli non presenti nella specifica.
 """
     interaction = get_client().interactions.create(
         model=IMAGE_MODEL,
@@ -230,6 +253,55 @@ Descrizione da seguire: {analysis.descrizione_visiva}
     if generated is None or not generated.data:
         raise ValueError("Il modello non ha restituito alcuna immagine.")
 
+    encoded = generated.data
+    if encoded.startswith("data:"):
+        encoded = encoded.split(",", 1)[1]
+    image_bytes = base64.b64decode(encoded, validate=True)
+    with Image.open(io.BytesIO(image_bytes)) as check:
+        check.verify()
+    return image_bytes, generated.mime_type or "image/jpeg"
+
+
+def _refine_chart_sync(
+    images: List[bytes],
+    current_chart: bytes,
+    motif_title: str,
+    multiple: str,
+    work_direction: str,
+    feedback: str,
+) -> tuple[bytes, str]:
+    prompt = f"""
+Perfeziona lo schema all'uncinetto fornito come ULTIMA immagine. Le immagini precedenti
+sono le fotografie del progetto originale. Non ripartire da zero: conserva ciò che è
+corretto nello schema attuale e applica la correzione richiesta dall'utente.
+
+Titolo: {motif_title}
+Multiplo attuale: {multiple}
+Direzione: {work_direction}
+Correzione prioritaria dell'utente: {feedback}
+
+Mantieni lo stile di un diagramma tecnico bianco e nero: simboli internazionali nitidi,
+righe numerate, rapporto di ripetizione evidenziato, margini ampi e una sola legenda
+minima. Migliora anche spaziatura e leggibilità senza modificare altri aspetti tecnici.
+Non aggiungere altri motivi, fotografie, decorazioni, paragrafi o misure non richieste.
+Se la correzione riguarda il multiplo o il numero delle righe, applica quel vincolo in
+modo coerente in tutto il diagramma invece di cambiare soltanto il testo del titolo.
+"""
+    interaction = get_client().interactions.create(
+        model=IMAGE_MODEL,
+        input=[{"type": "text", "text": prompt}]
+        + _image_inputs(images)
+        + _image_inputs([current_chart]),
+        response_format={
+            "type": "image",
+            "mime_type": "image/jpeg",
+            "aspect_ratio": IMAGE_ASPECT_RATIO,
+            "image_size": IMAGE_SIZE,
+        },
+    )
+    generated = interaction.output_image
+    if generated is None or not generated.data:
+        raise ValueError("Il modello non ha restituito lo schema perfezionato.")
     encoded = generated.data
     if encoded.startswith("data:"):
         encoded = encoded.split(",", 1)[1]
@@ -279,18 +351,35 @@ async def generate_pattern(
                 ),
                 timeout=AI_TIMEOUT_SECONDS,
             )
-            chart_bytes, chart_mime = await asyncio.wait_for(
-                asyncio.to_thread(_generate_chart_sync, images, analysis, work_direction),
-                timeout=AI_TIMEOUT_SECONDS,
-            )
+            generated_charts = []
+            for index, motif in enumerate(analysis.motivi, start=1):
+                chart_bytes, chart_mime = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        _generate_chart_sync,
+                        images,
+                        motif,
+                        index,
+                        work_direction,
+                    ),
+                    timeout=AI_TIMEOUT_SECONDS,
+                )
+                generated_charts.append(
+                    {
+                        "titolo": motif.nome,
+                        "multiplo": motif.multiplo,
+                        "immagine": base64.b64encode(chart_bytes).decode("ascii"),
+                        "mime_type": chart_mime,
+                    }
+                )
 
         return JSONResponse(
             content={
                 "status": "success",
                 "nome_punto": analysis.nome_punto,
                 "pattern": analysis.istruzioni_testuali,
-                "schema_image": base64.b64encode(chart_bytes).decode("ascii"),
-                "schema_mime_type": chart_mime,
+                "schemi": generated_charts,
+                "schema_image": generated_charts[0]["immagine"],
+                "schema_mime_type": generated_charts[0]["mime_type"],
                 "image_provider": IMAGE_MODEL,
                 "notice": "Bozza generata dall'AI: verifica simboli, multipli e misure con un campione.",
             },
@@ -312,6 +401,78 @@ async def generate_pattern(
         ) from exc
     except Exception as exc:
         logger.exception("Errore durante la generazione AI")
+        raise HTTPException(
+            status_code=502,
+            detail="Il servizio AI non è disponibile in questo momento. Riprova più tardi.",
+        ) from exc
+
+
+@app.post("/refine-chart")
+@limiter.limit(os.getenv("REFINE_RATE_LIMIT", "8/minute"))
+async def refine_chart(
+    request: Request,
+    chart: UploadFile = File(...),
+    files: List[UploadFile] = File(...),
+    motif_title: str = Form(default="Motivo"),
+    multiple: str = Form(default="Non specificato"),
+    work_direction: str = Form(default="In righe"),
+    feedback: str = Form(...),
+):
+    del request
+    motif_title = _clean_form_value(motif_title, "Motivo", "Il titolo")
+    multiple = _clean_form_value(multiple, "Non specificato", "Il multiplo")
+    work_direction = _clean_form_value(work_direction, "In righe", "La direzione")
+    feedback = feedback.strip()
+    if len(feedback) < 3 or len(feedback) > 1000:
+        raise HTTPException(
+            status_code=422,
+            detail="Scrivi una correzione da 3 a 1000 caratteri.",
+        )
+
+    chart_contents = await chart.read(MAX_FILE_BYTES + 1)
+    await chart.close()
+    if len(chart_contents) > MAX_FILE_BYTES:
+        raise HTTPException(status_code=413, detail="Lo schema da perfezionare è troppo grande.")
+    current_chart = _prepare_image(chart_contents)
+    images = await _read_images(files)
+
+    try:
+        async with ai_semaphore:
+            chart_bytes, chart_mime = await asyncio.wait_for(
+                asyncio.to_thread(
+                    _refine_chart_sync,
+                    images,
+                    current_chart,
+                    motif_title,
+                    multiple,
+                    work_direction,
+                    feedback,
+                ),
+                timeout=AI_TIMEOUT_SECONDS,
+            )
+        return JSONResponse(
+            content={
+                "status": "success",
+                "schema_image": base64.b64encode(chart_bytes).decode("ascii"),
+                "schema_mime_type": chart_mime,
+                "notice": "Schema perfezionato: verifica nuovamente simboli, multiplo e righe prima dell'uso.",
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+    except asyncio.TimeoutError as exc:
+        logger.warning("Timeout durante il perfezionamento AI", exc_info=True)
+        raise HTTPException(
+            status_code=504,
+            detail="Il perfezionamento sta impiegando troppo tempo. Riprova tra poco.",
+        ) from exc
+    except (ValidationError, ValueError) as exc:
+        logger.warning("Risposta di perfezionamento non valida: %s", exc)
+        raise HTTPException(
+            status_code=502,
+            detail="L'AI non ha restituito uno schema valido. Riprova con una correzione più precisa.",
+        ) from exc
+    except Exception as exc:
+        logger.exception("Errore durante il perfezionamento AI")
         raise HTTPException(
             status_code=502,
             detail="Il servizio AI non è disponibile in questo momento. Riprova più tardi.",
