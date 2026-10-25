@@ -2,14 +2,14 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image
 import google.genai as genai
 import json
 import io
 import base64
 from typing import List
 
-app = FastAPI(title="Uncinetto Vision API", version="3.1")
+app = FastAPI(title="Uncinetto Vision AI Native", version="5.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -23,7 +23,7 @@ client = genai.Client()
 
 @app.get("/")
 def home():
-    return {"status": "online", "message": "Uncinetto Vision API è attiva!"}
+    return {"status": "online", "message": "Uncinetto Vision API AI-Native è attiva!"}
 
 @app.post("/generate-pattern")
 async def generate_pattern(
@@ -53,26 +53,21 @@ async def generate_pattern(
         if not pil_images:
             raise HTTPException(status_code=400, detail="Nessuna immagine valida caricata.")
 
+        # Prompt progettato per richiedere un'analisi sartoriale profonda e la descrizione/struttura dello schema grafico
         prompt = f"""
         Agisci come una maestra d'uncinetto e una redattrice di riviste di moda d'eccellenza.
-        Parametri tecnici:
+        Parametri tecnici obbligatori:
         - Tipo di capo: '{garment_type}'
         - Direzione di lavorazione: '{work_direction}'
         - Spessore filato: '{yarn_weight}'
         - Misura uncinetto: '{hook_size}'
         
-        Analizza le immagini e restituisci un oggetto JSON valido (e nessun altro testo fuori dal JSON) con questa struttura esatta:
+        Analizza le immagini con la massima attenzione e restituisci un oggetto JSON valido (e nessun altro testo fuori dal JSON) con questa struttura esatta:
         {{
-          "nome_punto": "Nome tecnico della trama",
+          "nome_punto": "Nome tecnico della trama (es. Punto Ananas e Ventagli)",
           "istruzioni_testuali": "GUIDA EDITORIALE COMPLETA IN MARKDOWN (Introduzione, Misure in cm, Materiali, Multiplo, Istruzioni riga per riga, Assemblaggio, Rifiniture)...",
-          "righe_schema": [
-            {{"riga": 1, "sezione": "Base", "simboli": ["cat", "cat", "cat", "m_alta", "m_alta", "cat"]}},
-            {{"riga": 2, "sezione": "Motivo", "simboli": ["cat", "m_alta", "ventaglio", "m_alta", "cat"]}},
-            {{"riga": 3, "sezione": "Motivo", "simboli": ["cat", "ventaglio", "m_alta", "ventaglio"]}},
-            {{"riga": 4, "sezione": "Chiusura", "simboli": ["m_bassa", "m_bassa", "m_bassa"]}}
-          ]
+          "descrizione_schema_grafico": "Descrizione dettagliata riga per riga dello schema grafico tradizionale (simboli, catenelle, archetti, ventagli) da mostrare all'utente."
         }}
-        I simboli ammessi nell'array devono essere scelti tra: 'cat', 'm_alta', 'm_bassa', 'ventaglio', 'diminuzione', 'aumento'.
         """
 
         contents_payload = pil_images + [prompt]
@@ -89,56 +84,28 @@ async def generate_pattern(
 
         data_json = json.loads(raw_text)
 
-        # Generazione sicura dell'immagine PNG tramite Python/Pillow
-        img_width, img_height = 950, 650
-        chart_img = Image.new("RGB", (img_width, img_height), color="white")
-        draw = ImageDraw.Draw(chart_img)
-        
-        grid_size = 35
-        for x in range(0, img_width, grid_size):
-            draw.line([(x, 0), (x, img_height)], fill="#EAEAEA", width=1)
-        for y in range(0, img_height, grid_size):
-            draw.line([(0, y), (img_width, y)], fill="#EAEAEA", width=1)
+        # Generazione dell'immagine dello schema grafico tramite le capacità visive/creative dell'IA
+        chart_prompt = f"""
+        Crea un'immagine grafica professionale e pulita di uno schema all'uncinetto in stile rivista (tipo ManiFantasia), 
+        rappresentando il modulo del punto per il capo '{garment_type}' con i simboli tradizionali dell'uncinetto 
+        (catenelle 'o', maglie alte '|', ventagli e archetti) disposti su una griglia chiara a sfondo bianco con righe numerate R1, R2, R3...
+        Il disegno deve essere ordinato, tecnico, nitido e altamente leggibile, senza scritte confuse.
+        """
 
-        y_offset = 45
-        current_section = ""
-        
-        for riga_info in data_json.get("righe_schema", []):
-            sezione = riga_info.get("sezione", "Lavorazione")
-            
-            if sezione != current_section:
-                current_section = sezione
-                y_offset += 10
-                draw.text((30, y_offset), f"--- [ {current_section.upper()} ] ---", fill="purple")
-                y_offset += 35
+        image_response = client.models.generate_images(
+            model='imagen-3.0-generate-002',
+            prompt=chart_prompt,
+            config=dict(
+                number_of_images=1,
+                output_mime_type="image/png",
+                aspect_ratio="4:3"
+            )
+        )
 
-            draw.text((30, y_offset), f"R {riga_info['riga']}:", fill="black")
-            
-            x_offset = 100
-            for simbolo in riga_info["simboli"]:
-                if simbolo == "cat":
-                    draw.ellipse([x_offset, y_offset - 2, x_offset + 18, y_offset + 16], outline="blue", width=3)
-                elif simbolo == "m_alta":
-                    draw.line([x_offset + 9, y_offset - 6, x_offset + 9, y_offset + 22], fill="red", width=3)
-                    draw.line([x_offset + 4, y_offset + 7, x_offset + 14, y_offset + 7], fill="red", width=2)
-                elif simbolo == "m_bassa":
-                    draw.line([x_offset + 3, y_offset + 2, x_offset + 15, y_offset + 14], fill="green", width=3)
-                    draw.line([x_offset + 15, y_offset + 2, x_offset + 3, y_offset + 14], fill="green", width=3)
-                elif simbolo == "ventaglio":
-                    draw.arc([x_offset - 5, y_offset - 5, x_offset + 23, y_offset + 20], start=180, end=360, fill="darkmagenta", width=3)
-                    draw.line([x_offset + 9, y_offset + 8, x_offset + 9, y_offset + 22], fill="darkmagenta", width=2)
-                else:
-                    draw.rectangle([x_offset, y_offset + 2, x_offset + 16, y_offset + 14], outline="darkgreen", width=3)
-                
-                x_offset += 40
-            
-            y_offset += 50
-            if y_offset > img_height - 50:
-                break
-
-        buffered = io.BytesIO()
-        chart_img.save(buffered, format="PNG")
-        chart_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+        chart_base64 = ""
+        for generated_image in image_response.generated_images:
+            chart_base64 = base64.b64encode(generated_image.image.image_bytes).decode('utf-8')
+            break
 
         return {
             "status": "success",
