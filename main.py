@@ -34,7 +34,7 @@ Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
 warnings.simplefilter("error", Image.DecompressionBombWarning)
 
 limiter = Limiter(key_func=get_remote_address)
-app = FastAPI(title="Uncinetto Vision AI", version="12.0")
+app = FastAPI(title="Uncinetto Vision AI", version="12.1")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -434,6 +434,75 @@ async def generate_realistic_from_chart(
     if len(contents) > MAX_FILE_BYTES:
         raise HTTPException(status_code=413, detail="Lo schema grafico è troppo grande.")
     return await _realistic_response([_prepare_image(contents)], "chart", garment_type, yarn_weight, color, notes)
+
+
+def _crochet_advice_sync(answers: dict[str, str]) -> str:
+    labels = {
+        "experience": "Livello", "project": "Progetto", "material": "Materiale del filato",
+        "weight": "Spessore del filato", "hook": "Uncinetto", "direction": "Lavorazione",
+        "difficulty": "Difficoltà principale", "goal": "Obiettivo",
+    }
+    profile = "\n".join(f"- {labels[key]}: {value}" for key, value in answers.items())
+    prompt = f"""
+Agisci come una maestra d'uncinetto esperta, concreta e incoraggiante. Rispondi in italiano
+a questo profilo scelto dall'utente tramite un questionario:
+{profile}
+
+Crea una scheda personale intitolata CONSIGLI, TRUCCHI E SEGRETI DEL MESTIERE, adatta
+esattamente al livello, al progetto, ai materiali e alla difficoltà indicati. Organizzala con:
+1. Il consiglio più importante per questo profilo.
+2. Cinque consigli pratici numerati, specifici e immediatamente applicabili.
+3. Due trucchi del mestiere che aiutano davvero, senza promesse miracolose.
+4. Tre errori frequenti da evitare e come riconoscerli.
+5. Un esercizio breve sul campione, con un criterio semplice per valutare il risultato.
+6. Una checklist finale di cinque voci.
+
+Non inventare multipli, misure o numero di maglie non forniti. Se parli di campione, tensione,
+filato o uncinetto, ricorda che servono prove sul proprio progetto. Testo chiaro, tono caldo,
+nessuna introduzione generica, nessuna domanda finale, massimo 900 parole.
+"""
+    interaction = get_client().interactions.create(
+        model=TEXT_MODEL,
+        input=[{"type": "text", "text": prompt}],
+    )
+    advice = (interaction.output_text or "").strip()
+    if len(advice) < 150:
+        raise ValueError("I consigli ricevuti sono incompleti.")
+    return advice
+
+
+@app.post("/crochet-advice")
+@limiter.limit(os.getenv("ADVICE_RATE_LIMIT", "8/minute"))
+async def crochet_advice(
+    request: Request,
+    experience: str = Form(...), project: str = Form(...), material: str = Form(...),
+    weight: str = Form(...), hook: str = Form(...), direction: str = Form(...),
+    difficulty: str = Form(...), goal: str = Form(...),
+):
+    del request
+    raw = {
+        "experience": experience, "project": project, "material": material,
+        "weight": weight, "hook": hook, "direction": direction,
+        "difficulty": difficulty, "goal": goal,
+    }
+    answers = {key: _clean_form_value(value, "Non specificato", key) for key, value in raw.items()}
+    try:
+        async with ai_semaphore:
+            advice = await asyncio.wait_for(
+                asyncio.to_thread(_crochet_advice_sync, answers), timeout=AI_TIMEOUT_SECONDS,
+            )
+        return JSONResponse(
+            content={"status": "success", "advice": advice},
+            headers={"Cache-Control": "no-store"},
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(status_code=504, detail="La preparazione dei consigli sta impiegando troppo tempo. Riprova tra poco.") from exc
+    except (ValidationError, ValueError) as exc:
+        logger.warning("Consigli AI non validi: %s", exc)
+        raise HTTPException(status_code=502, detail="L'AI non ha restituito consigli completi. Riprova.") from exc
+    except Exception as exc:
+        logger.exception("Errore durante la generazione dei consigli")
+        raise HTTPException(status_code=502, detail="Il servizio AI non è disponibile in questo momento. Riprova più tardi.") from exc
 
 
 @app.get("/")
