@@ -34,7 +34,7 @@ Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
 warnings.simplefilter("error", Image.DecompressionBombWarning)
 
 limiter = Limiter(key_func=get_remote_address)
-app = FastAPI(title="Uncinetto Vision AI", version="11.1")
+app = FastAPI(title="Uncinetto Vision AI", version="12.0")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -309,6 +309,131 @@ modo coerente in tutto il diagramma invece di cambiare soltanto il testo del tit
     with Image.open(io.BytesIO(image_bytes)) as check:
         check.verify()
     return image_bytes, generated.mime_type or "image/jpeg"
+
+
+def _generate_realistic_sync(
+    source_images: List[bytes],
+    source_kind: str,
+    garment_type: str,
+    yarn_weight: str,
+    color: str,
+    notes: str,
+    pattern_text: str = "",
+) -> tuple[bytes, str]:
+    source = (
+        "Lo SCHEMA TESTUALE completo riportato sotto descrive il capo da visualizzare."
+        if source_kind == "pattern"
+        else "Il DIAGRAMMA GRAFICO allegato descrive il motivo e la struttura del capo da visualizzare."
+    )
+    prompt = f"""
+Crea direttamente una sola immagine fotorealistica di un capo lavorato all'uncinetto.
+{source}
+Interpreta il riferimento come una proposta visiva, senza sostenere che sia una riproduzione
+tecnicamente esatta. Rispetta il tipo di capo, i motivi, i trafori, la silhouette e le
+finiture descritti. Non aggiungere accessori o decorazioni non richiesti.
+
+TIPO DI CAPO: {garment_type}
+FILATO: {yarn_weight}
+COLORE PREFERITO: {color}
+INDICAZIONI AGGIUNTIVE: {notes}
+SCHEMA TESTUALE: {pattern_text}
+
+Presenta il capo intero, ben visibile e centrato, su manichino sartoriale neutro oppure
+disteso su una superficie chiara. Texture del filato credibile e punti leggibili, luce
+naturale morbida, fotografia artigianale editoriale. Nessuna persona, nessuna scritta,
+nessun watermark, nessuno schema grafico sovrapposto, nessun collage.
+"""
+    interaction = get_client().interactions.create(
+        model=IMAGE_MODEL,
+        input=[{"type": "text", "text": prompt}] + _image_inputs(source_images),
+        response_format={
+            "type": "image",
+            "mime_type": "image/jpeg",
+            "aspect_ratio": IMAGE_ASPECT_RATIO,
+            "image_size": IMAGE_SIZE,
+        },
+    )
+    generated = interaction.output_image
+    if generated is None or not generated.data:
+        raise ValueError("Il modello non ha restituito l'immagine realistica.")
+    encoded = generated.data
+    if encoded.startswith("data:"):
+        encoded = encoded.split(",", 1)[1]
+    image_bytes = base64.b64decode(encoded, validate=True)
+    with Image.open(io.BytesIO(image_bytes)) as check:
+        check.verify()
+    return image_bytes, generated.mime_type or "image/jpeg"
+
+
+async def _realistic_response(
+    source_images: List[bytes], source_kind: str, garment_type: str,
+    yarn_weight: str, color: str, notes: str, pattern_text: str = "",
+) -> JSONResponse:
+    garment_type = _clean_form_value(garment_type, "Maglione", "Il tipo di capo")
+    yarn_weight = _clean_form_value(yarn_weight, "Non specificato", "Il filato")
+    color = _clean_form_value(color, "Ecru", "Il colore")
+    notes = notes.strip()
+    if len(notes) > 1500:
+        raise HTTPException(status_code=422, detail="Le indicazioni aggiuntive sono troppo lunghe.")
+    try:
+        async with ai_semaphore:
+            image_bytes, mime_type = await asyncio.wait_for(
+                asyncio.to_thread(
+                    _generate_realistic_sync, source_images, source_kind, garment_type,
+                    yarn_weight, color, notes, pattern_text,
+                ), timeout=AI_TIMEOUT_SECONDS,
+            )
+        return JSONResponse(
+            content={
+                "status": "success",
+                "realistic_image": base64.b64encode(image_bytes).decode("ascii"),
+                "realistic_mime_type": mime_type,
+                "notice": "Interpretazione visiva AI: la resa reale dipende da filato, mano, misure e campione.",
+            }, headers={"Cache-Control": "no-store"},
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(status_code=504, detail="La generazione sta impiegando troppo tempo. Riprova tra poco.") from exc
+    except (ValidationError, ValueError) as exc:
+        logger.warning("Immagine realistica non valida: %s", exc)
+        raise HTTPException(status_code=502, detail="L'AI non ha restituito un'immagine valida. Riprova con indicazioni più precise.") from exc
+    except Exception as exc:
+        logger.exception("Errore durante la generazione realistica")
+        raise HTTPException(status_code=502, detail="Il servizio AI non è disponibile in questo momento. Riprova più tardi.") from exc
+
+
+@app.post("/generate-realistic-from-pattern")
+@limiter.limit(os.getenv("REALISTIC_RATE_LIMIT", "5/minute"))
+async def generate_realistic_from_pattern(
+    request: Request,
+    pattern: str = Form(...),
+    garment_type: str = Form(default="Maglione"),
+    yarn_weight: str = Form(default="Non specificato"),
+    color: str = Form(default="Ecru"),
+    notes: str = Form(default=""),
+):
+    del request
+    pattern = pattern.strip()
+    if len(pattern) < 30 or len(pattern) > 20000:
+        raise HTTPException(status_code=422, detail="Inserisci uno schema del capo da 30 a 20.000 caratteri.")
+    return await _realistic_response([], "pattern", garment_type, yarn_weight, color, notes, pattern)
+
+
+@app.post("/generate-realistic-from-chart")
+@limiter.limit(os.getenv("REALISTIC_RATE_LIMIT", "5/minute"))
+async def generate_realistic_from_chart(
+    request: Request,
+    chart: UploadFile = File(...),
+    garment_type: str = Form(default="Maglione"),
+    yarn_weight: str = Form(default="Non specificato"),
+    color: str = Form(default="Ecru"),
+    notes: str = Form(default=""),
+):
+    del request
+    contents = await chart.read(MAX_FILE_BYTES + 1)
+    await chart.close()
+    if len(contents) > MAX_FILE_BYTES:
+        raise HTTPException(status_code=413, detail="Lo schema grafico è troppo grande.")
+    return await _realistic_response([_prepare_image(contents)], "chart", garment_type, yarn_weight, color, notes)
 
 
 @app.get("/")
