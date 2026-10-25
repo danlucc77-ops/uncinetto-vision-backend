@@ -2,14 +2,12 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image
 import google.genai as genai
 import json
-import io
-import base64
 from typing import List
 
-app = FastAPI(title="Uncinetto Vision API", version="1.0")
+app = FastAPI(title="Uncinetto Vision API", version="2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -23,7 +21,7 @@ client = genai.Client()
 
 @app.get("/")
 def home():
-    return {"status": "online", "message": "Uncinetto Vision API è attiva!"}
+    return {"status": "online", "message": "Uncinetto Vision API Pro è attiva!"}
 
 @app.post("/generate-pattern")
 async def generate_pattern(
@@ -69,21 +67,15 @@ async def generate_pattern(
         2. **Misure e Taglia di Riferimento**: Dimensioni indicative in centimetri (es. larghezza, lunghezza totale, altezza scalfo, lunghezza maniche).
         3. **Materiale Occorrente**: Tipo di filato consigliato, grammatura stimata e misura dell'uncinetto.
         4. **Multiplo e Campione**: La regola matematica per avviare la catenella iniziale in base al motivo visibile nelle foto.
-        5. **Istruzioni Dettagliate dei Motivi**: Spiegazione passo-passo, riga per riga o giro per giro, di ogni schema di punto presente nelle immagini (es. Motivo 1, Motivo 2, ecc.).
-        6. **Assemblaggio e Cuciture**: Come unire i pannelli (dritto contro dritto, cucitura delle spalle, lasciare l'apertura per lo scollo a barchetta e per le maniche).
-        7. **Rifiniture**: Bordi finali (es. giro di maglie basse sullo scollo e sulle maniche).
+        5. **Istruzioni Dettagliate dei Motivi**: Spiegazione passo-passo, riga per riga o giro per giro, di ogni schema di punto presente nelle immagini.
+        6. **Assemblaggio e Cuciture**: Come unire i pannelli (dritto contro dritto, cucitura delle spalle, scollo, maniche).
+        7. **Rifiniture**: Bordi finali.
 
-        Restituisci un oggetto JSON valido (e nessun άλλο testo fuori dal JSON) con questa struttura:
+        Restituisci un oggetto JSON valido (e nessun altro testo fuori dal JSON) con questa struttura esatta:
         {{
           "nome_punto": "Nome tecnico della trama principale",
-          "istruzioni_testuali": "IL TESTO EDITORIALE COMPLETO E DETTAGLIATO CON TUTTE LE SEZIONI SOPRA ELENCATE, FORMATTATO IN MARKDOWN...",
-          "righe_schema": [
-            {{"riga": 1, "sezione": "Base / Avvio", "simboli": ["cat", "cat", "cat", "m_alta", "m_alta"]}},
-            {{"riga": 2, "sezione": "Motivo Principale", "simboli": ["cat", "m_alta", "ventaglio", "m_alta"]}},
-            {{"riga": 3, "sezione": "Rifinitura", "simboli": ["m_bassa", "m_bassa"]}}
-          ]
+          "istruzioni_testuali": "IL TESTO EDITORIALE COMPLETO E DETTAGLIATO CON TUTTE LE SEZIONI SOPRA ELENCATE, FORMATTATO IN MARKDOWN..."
         }}
-        I simboli ammessi nell'array devono essere scelti tra: 'cat', 'm_alta', 'm_bassa', 'ventaglio', 'diminuzione', 'aumento'.
         """
 
         contents_payload = pil_images + [prompt]
@@ -100,61 +92,10 @@ async def generate_pattern(
 
         data_json = json.loads(raw_text)
 
-        # Generazione grafico stile carta a quadretti
-        img_width, img_height = 900, 700
-        chart_img = Image.new("RGB", (img_width, img_height), color="white")
-        draw = ImageDraw.Draw(chart_img)
-        
-        grid_size = 30
-        for x in range(0, img_width, grid_size):
-            draw.line([(x, 0), (x, img_height)], fill="#F0F0F0", width=1)
-        for y in range(0, img_height, grid_size):
-            draw.line([(0, y), (img_width, y)], fill="#F0F0F0", width=1)
-
-        y_offset = 40
-        current_section = ""
-        
-        for riga_info in data_json.get("righe_schema", []):
-            sezione = riga_info.get("sezione", "Lavorazione")
-            
-            if sezione != current_section:
-                current_section = sezione
-                y_offset += 10
-                draw.text((30, y_offset), f"--- [ {current_section.upper()} ] ---", fill="purple")
-                y_offset += 35
-
-            draw.text((30, y_offset), f"R {riga_info['riga']}:", fill="black")
-            
-            x_offset = 100
-            for simbolo in riga_info["simboli"]:
-                if simbolo == "cat":
-                    draw.ellipse([x_offset, y_offset - 2, x_offset + 18, y_offset + 16], outline="blue", width=3)
-                elif simbolo == "m_alta":
-                    draw.line([x_offset + 9, y_offset - 5, x_offset + 9, y_offset + 20], fill="red", width=3)
-                    draw.line([x_offset + 4, y_offset + 7, x_offset + 14, y_offset + 7], fill="red", width=2)
-                elif simbolo == "m_bassa":
-                    draw.line([x_offset + 3, y_offset + 2, x_offset + 15, y_offset + 14], fill="green", width=3)
-                    draw.line([x_offset + 15, y_offset + 2, x_offset + 3, y_offset + 14], fill="green", width=3)
-                elif simbolo == "diminuzione":
-                    draw.line([x_offset, y_offset, x_offset + 18, y_offset + 16], fill="orange", width=3)
-                    draw.line([x_offset + 18, y_offset, x_offset, y_offset + 16], fill="orange", width=3)
-                else:
-                    draw.rectangle([x_offset, y_offset + 2, x_offset + 16, y_offset + 14], outline="darkgreen", width=3)
-                
-                x_offset += 35
-            
-            y_offset += 45
-            if y_offset > img_height - 50:
-                break
-
-        buffered = io.BytesIO()
-        chart_img.save(buffered, format="PNG")
-        chart_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
-
         return {
             "status": "success",
-            "pattern": data_json["istruzioni_testuali"],
-            "schema_image": chart_base64
+            "nome_punto": data_json.get("nome_punto", "Schema Uncinetto"),
+            "pattern": data_json["istruzioni_testuali"]
         }
 
     except Exception as e:
