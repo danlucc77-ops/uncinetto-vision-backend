@@ -2,12 +2,14 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 import google.genai as genai
 import json
+import io
+import base64
 from typing import List
 
-app = FastAPI(title="Uncinetto Vision API SVG", version="3.0")
+app = FastAPI(title="Uncinetto Vision API", version="3.1")
 
 app.add_middleware(
     CORSMiddleware,
@@ -21,7 +23,7 @@ client = genai.Client()
 
 @app.get("/")
 def home():
-    return {"status": "online", "message": "Uncinetto Vision API SVG è attiva!"}
+    return {"status": "online", "message": "Uncinetto Vision API è attiva!"}
 
 @app.post("/generate-pattern")
 async def generate_pattern(
@@ -51,7 +53,6 @@ async def generate_pattern(
         if not pil_images:
             raise HTTPException(status_code=400, detail="Nessuna immagine valida caricata.")
 
-        # Prompt avanzato per istruzioni sartoriali e codice SVG dello schema grafico
         prompt = f"""
         Agisci come una maestra d'uncinetto e una redattrice di riviste di moda d'eccellenza.
         Parametri tecnici:
@@ -60,16 +61,18 @@ async def generate_pattern(
         - Spessore filato: '{yarn_weight}'
         - Misura uncinetto: '{hook_size}'
         
-        Analizza le immagini e genera:
-        1. Una guida sartoriale dettagliata (Introduzione, Misure in cm, Materiali, Multiplo, Istruzioni riga per riga, Assemblaggio, Rifiniture) formattata in Markdown.
-        2. Un codice SVG valido e completo (inizia con <svg ...> e finisce con </svg>) che rappresenti lo schema grafico vettoriale del punto visibile nelle foto (con griglia di sfondo, simboli di catenelle 'o', maglie alte '|' e ventagli 'V', disposti su righe numerate R1, R2, ecc.).
-        
-        Restituisci un oggetto JSON valido (e nessun altro testo fuori dal JSON) con questa struttura esatta:
+        Analizza le immagini e restituisci un oggetto JSON valido (e nessun altro testo fuori dal JSON) con questa struttura esatta:
         {{
           "nome_punto": "Nome tecnico della trama",
-          "istruzioni_testuali": "GUIDA EDITORIALE COMPLETA IN MARKDOWN...",
-          "schema_svg": "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 600' width='100%' height='100%'><rect width='100%' height='100%' fill='white'/><!-- Inserisci qui tracciati, cerchi, linee e testi per lo schema grafico uncinetto --></svg>"
+          "istruzioni_testuali": "GUIDA EDITORIALE COMPLETA IN MARKDOWN (Introduzione, Misure in cm, Materiali, Multiplo, Istruzioni riga per riga, Assemblaggio, Rifiniture)...",
+          "righe_schema": [
+            {{"riga": 1, "sezione": "Base", "simboli": ["cat", "cat", "cat", "m_alta", "m_alta", "cat"]}},
+            {{"riga": 2, "sezione": "Motivo", "simboli": ["cat", "m_alta", "ventaglio", "m_alta", "cat"]}},
+            {{"riga": 3, "sezione": "Motivo", "simboli": ["cat", "ventaglio", "m_alta", "ventaglio"]}},
+            {{"riga": 4, "sezione": "Chiusura", "simboli": ["m_bassa", "m_bassa", "m_bassa"]}}
+          ]
         }}
+        I simboli ammessi nell'array devono essere scelti tra: 'cat', 'm_alta', 'm_bassa', 'ventaglio', 'diminuzione', 'aumento'.
         """
 
         contents_payload = pil_images + [prompt]
@@ -86,11 +89,62 @@ async def generate_pattern(
 
         data_json = json.loads(raw_text)
 
+        # Generazione sicura dell'immagine PNG tramite Python/Pillow
+        img_width, img_height = 950, 650
+        chart_img = Image.new("RGB", (img_width, img_height), color="white")
+        draw = ImageDraw.Draw(chart_img)
+        
+        grid_size = 35
+        for x in range(0, img_width, grid_size):
+            draw.line([(x, 0), (x, img_height)], fill="#EAEAEA", width=1)
+        for y in range(0, img_height, grid_size):
+            draw.line([(0, y), (img_width, y)], fill="#EAEAEA", width=1)
+
+        y_offset = 45
+        current_section = ""
+        
+        for riga_info in data_json.get("righe_schema", []):
+            sezione = riga_info.get("sezione", "Lavorazione")
+            
+            if sezione != current_section:
+                current_section = sezione
+                y_offset += 10
+                draw.text((30, y_offset), f"--- [ {current_section.upper()} ] ---", fill="purple")
+                y_offset += 35
+
+            draw.text((30, y_offset), f"R {riga_info['riga']}:", fill="black")
+            
+            x_offset = 100
+            for simbolo in riga_info["simboli"]:
+                if simbolo == "cat":
+                    draw.ellipse([x_offset, y_offset - 2, x_offset + 18, y_offset + 16], outline="blue", width=3)
+                elif simbolo == "m_alta":
+                    draw.line([x_offset + 9, y_offset - 6, x_offset + 9, y_offset + 22], fill="red", width=3)
+                    draw.line([x_offset + 4, y_offset + 7, x_offset + 14, y_offset + 7], fill="red", width=2)
+                elif simbolo == "m_bassa":
+                    draw.line([x_offset + 3, y_offset + 2, x_offset + 15, y_offset + 14], fill="green", width=3)
+                    draw.line([x_offset + 15, y_offset + 2, x_offset + 3, y_offset + 14], fill="green", width=3)
+                elif simbolo == "ventaglio":
+                    draw.arc([x_offset - 5, y_offset - 5, x_offset + 23, y_offset + 20], start=180, end=360, fill="darkmagenta", width=3)
+                    draw.line([x_offset + 9, y_offset + 8, x_offset + 9, y_offset + 22], fill="darkmagenta", width=2)
+                else:
+                    draw.rectangle([x_offset, y_offset + 2, x_offset + 16, y_offset + 14], outline="darkgreen", width=3)
+                
+                x_offset += 40
+            
+            y_offset += 50
+            if y_offset > img_height - 50:
+                break
+
+        buffered = io.BytesIO()
+        chart_img.save(buffered, format="PNG")
+        chart_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+
         return {
             "status": "success",
             "nome_punto": data_json.get("nome_punto", "Schema Uncinetto"),
             "pattern": data_json["istruzioni_testuali"],
-            "schema_svg": data_json.get("schema_svg", "")
+            "schema_image": chart_base64
         }
 
     except Exception as e:
