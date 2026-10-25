@@ -53,30 +53,39 @@ async def generate_pattern(
         if not pil_images:
             raise HTTPException(status_code=400, detail="Nessuna immagine valida caricata.")
 
-        # Prompt dettagliato che sfrutta tutte le foto (panoramica + dettagli ravvicinati)
+        # Prompt editoriale e sartoriale di livello professionale
         prompt = f"""
-        Agisci come una maestra d'uncinetto e un designer di moda esperto.
-        Ti sono state fornite più immagini dello stesso progetto (foto d'insieme e dettagli ravvicinati del punto).
+        Agisci come una maestra d'uncinetto e una redattrice di riviste di moda e artigianato d'eccellenza.
+        Ti sono state fornite immagini dettagliate del capo e dei suoi schemi.
         Parametri tecnici obbligatori:
         - Tipo di capo: '{garment_type}'
         - Direzione di lavorazione: '{work_direction}'
         - Spessore filato: '{yarn_weight}'
         - Misura uncinetto: '{hook_size}'
         
-        Analizza le immagini e restituisci un oggetto JSON valido (e nessun altro testo fuori dal JSON) con questa struttura:
+        Analizza le immagini con la massima attenzione e genera un pattern estremamente dettagliato, strutturato rigorosamente con queste sezioni editoriali (stile tutorial professionale):
+
+        1. **Introduzione al Modello**: Descrizione della forma (es. struttura a T, linearità, vestibilità).
+        2. **Misure e Taglia di Riferimento**: Dimensioni indicative in centimetri (es. larghezza, lunghezza totale, altezza scalfo, lunghezza maniche).
+        3. **Materiale Occorrente**: Tipo di filato consigliato, grammatura stimata e misura dell'uncinetto.
+        4. **Multiplo e Campione**: La regola matematica per avviare la catenella iniziale in base al motivo visibile nelle foto.
+        5. **Istruzioni Dettagliate dei Motivi**: Spiegazione passo-passo, riga per riga o giro per giro, di ogni schema di punto presente nelle immagini (es. Motivo 1, Motivo 2, ecc.).
+        6. **Assemblaggio e Cuciture**: Come unire i pannelli (dritto contro dritto, cucitura delle spalle, lasciare l'apertura per lo scollo a barchetta e per le maniche).
+        7. **Rifiniture**: Bordi finali (es. giro di maglie basse sullo scollo e sulle maniche).
+
+        Restituisci un oggetto JSON valido (e nessun άλλο testo fuori dal JSON) con questa struttura:
         {{
-          "nome_punto": "Nome della trama",
-          "istruzioni_testuali": "Istruzioni dettagliate passo-passo divise per sezioni (es. Corpo, Scollo, Maniche) adatte per un {garment_type}...",
+          "nome_punto": "Nome tecnico della trama principale",
+          "istruzioni_testuali": "IL TESTO EDITORIALE COMPLETO E DETTAGLIATO CON TUTTE LE SEZIONI SOPRA ELENCATE, FORMATTATO IN MARKDOWN...",
           "righe_schema": [
             {{"riga": 1, "sezione": "Base / Avvio", "simboli": ["cat", "cat", "cat", "m_alta", "m_alta"]}},
-            {{"riga": 2, "sezione": "Corpo - Motivo", "simboli": ["cat", "m_alta", "ventaglio", "m_alta"]}},
-            {{"riga": 3, "sezione": "Giromanica / Scollo", "simboli": ["diminuzione", "m_alta", "m_alta"]}}
+            {{"riga": 2, "sezione": "Motivo Principale", "simboli": ["cat", "m_alta", "ventaglio", "m_alta"]}},
+            {{"riga": 3, "sezione": "Rifinitura", "simboli": ["m_bassa", "m_bassa"]}}
           ]
         }}
-        I simboli ammessi nell'array devono essere scelti esclusivamente tra: 'cat' (catenella), 'm_alta' (maglia alta), 'm_bassa' (maglia bassa), 'ventaglio', 'diminuzione', 'aumento'.
+        I simboli ammessi nell'array devono essere scelti tra: 'cat', 'm_alta', 'm_bassa', 'ventaglio', 'diminuzione', 'aumento'.
         """
 
-        # Inviamo tutte le immagini insieme al prompt a Gemini
         contents_payload = pil_images + [prompt]
         response = client.models.generate_content(
             model='gemini-3.8-flash',
@@ -91,12 +100,11 @@ async def generate_pattern(
 
         data_json = json.loads(raw_text)
 
-        # --- GENERAZIONE GRAFICO GRANDE, PULITO E LEGGIBILE (Stile Carta a Quadretti) ---
+        # Generazione grafico stile carta a quadretti
         img_width, img_height = 900, 700
         chart_img = Image.new("RGB", (img_width, img_height), color="white")
         draw = ImageDraw.Draw(chart_img)
         
-        # Disegniamo una griglia leggera stile carta a quadretti
         grid_size = 30
         for x in range(0, img_width, grid_size):
             draw.line([(x, 0), (x, img_height)], fill="#F0F0F0", width=1)
@@ -115,36 +123,29 @@ async def generate_pattern(
                 draw.text((30, y_offset), f"--- [ {current_section.upper()} ] ---", fill="purple")
                 y_offset += 35
 
-            # Etichetta Riga
             draw.text((30, y_offset), f"R {riga_info['riga']}:", fill="black")
             
             x_offset = 100
             for simbolo in riga_info["simboli"]:
-                # Disegniamo simboli grandi, ben distanziati e chiaramente leggibili
                 if simbolo == "cat":
-                    # Cerchietto blu chiaro/scuro per la catenella
                     draw.ellipse([x_offset, y_offset - 2, x_offset + 18, y_offset + 16], outline="blue", width=3)
                 elif simbolo == "m_alta":
-                    # Lineetta verticale rossa con trattino orizzontale per la maglia alta
                     draw.line([x_offset + 9, y_offset - 5, x_offset + 9, y_offset + 20], fill="red", width=3)
                     draw.line([x_offset + 4, y_offset + 7, x_offset + 14, y_offset + 7], fill="red", width=2)
                 elif simbolo == "m_bassa":
-                    # Crocetta o X verde per la maglia bassa
                     draw.line([x_offset + 3, y_offset + 2, x_offset + 15, y_offset + 14], fill="green", width=3)
                     draw.line([x_offset + 15, y_offset + 2, x_offset + 3, y_offset + 14], fill="green", width=3)
                 elif simbolo == "diminuzione":
-                    # Simbolo di diminuzione arancione
                     draw.line([x_offset, y_offset, x_offset + 18, y_offset + 16], fill="orange", width=3)
                     draw.line([x_offset + 18, y_offset, x_offset, y_offset + 16], fill="orange", width=3)
                 else:
-                    # Rettangolo generico per ventagli o altri punti
                     draw.rectangle([x_offset, y_offset + 2, x_offset + 16, y_offset + 14], outline="darkgreen", width=3)
                 
-                x_offset += 35  # Spaziatura ampia per evitare sovrapposizioni
+                x_offset += 35
             
             y_offset += 45
             if y_offset > img_height - 50:
-                break # Evita di uscire dall'immagine se ci sono molte righe
+                break
 
         buffered = io.BytesIO()
         chart_img.save(buffered, format="PNG")
