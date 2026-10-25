@@ -34,7 +34,7 @@ Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
 warnings.simplefilter("error", Image.DecompressionBombWarning)
 
 limiter = Limiter(key_func=get_remote_address)
-app = FastAPI(title="Uncinetto Vision AI", version="10.0")
+app = FastAPI(title="Uncinetto Vision AI", version="10.1")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -221,7 +221,7 @@ Descrizione da seguire: {analysis.descrizione_visiva}
         input=[{"type": "text", "text": prompt}] + _image_inputs(images),
         response_format={
             "type": "image",
-            "mime_type": "image/png",
+            "mime_type": "image/jpeg",
             "aspect_ratio": IMAGE_ASPECT_RATIO,
             "image_size": IMAGE_SIZE,
         },
@@ -236,7 +236,7 @@ Descrizione da seguire: {analysis.descrizione_visiva}
     image_bytes = base64.b64decode(encoded, validate=True)
     with Image.open(io.BytesIO(image_bytes)) as check:
         check.verify()
-    return image_bytes, generated.mime_type or "image/png"
+    return image_bytes, generated.mime_type or "image/jpeg"
 
 
 @app.get("/")
