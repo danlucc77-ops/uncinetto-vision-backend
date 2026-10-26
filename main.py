@@ -17,6 +17,8 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
+from marketplace import router as marketplace_router
+
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("uncinetto-vision")
 
@@ -34,9 +36,10 @@ Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
 warnings.simplefilter("error", Image.DecompressionBombWarning)
 
 limiter = Limiter(key_func=get_remote_address)
-app = FastAPI(title="Uncinetto Vision AI", version="12.1")
+app = FastAPI(title="Uncinetto Vision AI", version="13.0")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.include_router(marketplace_router)
 
 allowed_origins = [
     origin.strip()
@@ -47,11 +50,19 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     allow_credentials=False,
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 ai_semaphore = asyncio.Semaphore(int(os.getenv("MAX_CONCURRENT_AI_REQUESTS", "2")))
+
+
+@app.middleware("http")
+async def marketplace_no_store(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/market/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 class CrochetMotif(BaseModel):
